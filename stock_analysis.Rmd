@@ -1,0 +1,157 @@
+---
+title: "Comparative Technical and Volatility Analysis of Microsoft, Amazon, and NVIDIA Stocks"
+author: "Chanchal Panjabi"
+date: "2025-04-23"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(quantmod)
+library(plotly)
+library(dplyr)
+library(tidyr)
+library(TTR)
+```
+
+```{r get-data}
+symbols <- c("MSFT", "AMZN", "NVDA")
+start_date <- Sys.Date() - 180
+end_date <- Sys.Date()
+
+get_stock_data <- function(symbol) {
+  stock <- getSymbols(symbol, src = "yahoo", from = start_date, to = end_date, auto.assign = FALSE)
+  stock_df <- data.frame(Date = index(stock), coredata(stock))
+  colnames(stock_df) <- c("Date", "Open", "High", "Low", "Close", "Volume", "Adjusted")
+  
+  stock_df <- stock_df %>%
+    mutate(
+      DailyReturn = c(NA, diff(Adjusted) / lag(Adjusted, 1)[-1]),
+      MA5 = SMA(Adjusted, 5),
+      MA20 = SMA(Adjusted, 20),
+      MA50 = SMA(Adjusted, 50)
+    )
+  
+  bb <- BBands(stock_df$Adjusted, n = 20)
+  stock_df <- cbind(stock_df, bb[, c("up", "dn")])
+  stock_df$Symbol <- symbol
+  
+  return(stock_df)
+}
+
+all_stocks <- lapply(symbols, get_stock_data)
+all_stocks_df <- do.call(rbind, all_stocks)
+```
+
+```{r candlestick-function}
+create_candlestick <- function(stock_df, symbol) {
+  df <- stock_df %>% filter(Symbol == symbol)
+  
+  p <- plot_ly(data = df, type = "candlestick",
+          x = ~Date, open = ~Open, close = ~Close,
+          high = ~High, low = ~Low, name = "Price") %>%
+    add_lines(x = ~Date, y = ~MA5, name = "5-day MA", line = list(color = 'blue')) %>%
+    add_lines(x = ~Date, y = ~MA20, name = "20-day MA", line = list(color = 'orange')) %>%
+    add_lines(x = ~Date, y = ~MA50, name = "50-day MA", line = list(color = 'green')) %>%
+    add_lines(x = ~Date, y = ~up, name = "Upper BB", line = list(color = 'purple', dash = "dot")) %>%
+    add_lines(x = ~Date, y = ~dn, name = "Lower BB", line = list(color = 'purple', dash = "dot")) %>%
+    layout(title = paste(symbol, "Stock Price"),
+           xaxis = list(title = "Date"),
+           yaxis = list(title = "Price (USD)"),
+           legend = list(orientation = "h", x = 0.5, y = 1.05, xanchor = "center"))
+  
+  return(p)
+}
+```
+
+```{r candlestick-msft}
+create_candlestick(all_stocks_df, "MSFT")
+```
+
+```{r candlestick-amzn}
+create_candlestick(all_stocks_df, "AMZN")
+```
+
+```{r candlestick-nvda}
+create_candlestick(all_stocks_df, "NVDA")
+```
+
+```{r summary-table}
+returns_df <- all_stocks_df %>%
+  select(Date, Symbol, DailyReturn) %>%
+  na.omit()
+
+risk_free_rate <- 0.01 / 252  # Daily risk-free rate
+
+summary_stats <- returns_df %>%
+  group_by(Symbol) %>%
+  summarize(
+    Mean_Return = mean(DailyReturn),
+    Std_Dev = sd(DailyReturn),
+    Min_Return = min(DailyReturn),
+    Max_Return = max(DailyReturn)
+  ) %>%
+  mutate(
+    Sharpe_Ratio = (Mean_Return - risk_free_rate) / Std_Dev
+  )
+
+summary_stats
+```
+
+```{r volatility-barplot}
+plot_ly(summary_stats, x = ~Symbol, y = ~Std_Dev, type = 'bar',
+        marker = list(color = 'tomato')) %>%
+  layout(title = "Volatility Comparison",
+         xaxis = list(title = "Stock"),
+         yaxis = list(title = "Standard Deviation of Daily Return"))
+```
+
+```{r most-volatile}
+most_volatile <- summary_stats %>%
+  filter(Std_Dev == max(Std_Dev)) %>%
+  pull(Symbol)
+
+cat("👉 Most volatile stock in this period:", most_volatile)
+```
+
+```{r return-distribution}
+plot_ly() %>%
+  add_histogram(data = filter(returns_df, Symbol == "MSFT"), x = ~DailyReturn, name = "MSFT", opacity = 0.6) %>%
+  add_histogram(data = filter(returns_df, Symbol == "AMZN"), x = ~DailyReturn, name = "AMZN", opacity = 0.6) %>%
+  add_histogram(data = filter(returns_df, Symbol == "NVDA"), x = ~DailyReturn, name = "NVDA", opacity = 0.6) %>%
+  layout(title = "Distribution of Daily Returns",
+         barmode = "overlay",
+         xaxis = list(title = "Daily Return"),
+         yaxis = list(title = "Frequency"))
+```
+
+```{r return-chart}
+# Density Plot of Daily Returns
+densities <- returns_df %>%
+  group_by(Symbol) %>%
+  summarize(density_data = list(density(DailyReturn, na.rm = TRUE)), .groups = "drop") %>%
+  mutate(
+    x = lapply(density_data, function(d) d$x),
+    y = lapply(density_data, function(d) d$y)
+  ) %>%
+  select(Symbol, x, y) %>%
+  unnest(cols = c(x, y))
+
+plot_ly(data = densities, x = ~x, y = ~y, color = ~Symbol, type = 'scatter', mode = 'lines') %>%
+  layout(title = "Density of Daily Returns",
+         xaxis = list(title = "Daily Return"),
+         yaxis = list(title = "Density"))
+
+```
+
+```{r interpretation}
+cat("### 📈 Summary of Findings\n",
+    "- **", most_volatile, "** exhibited the highest volatility over the past 180 days.\n",
+    "- Candlestick charts help visualize price trends and technical indicators.\n",
+    "- Density plots reveal return distribution patterns and help compare risk.\n",
+    "- Volatility plot shows relative risk across the analyzed stocks.\n", sep = "")
+```
